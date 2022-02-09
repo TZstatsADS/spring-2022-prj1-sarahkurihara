@@ -1,0 +1,276 @@
+---
+title: "How Men and Women Differ in the Eyes of Philosophy"
+author: "Sarah Kurihara"
+date: "2/8/2022"
+output: 
+  html_document: 
+    toc: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(tidytext)
+library(ggplot2)
+library(forcats)
+library(stringr)
+library(topicmodels)
+library(reshape2)
+library(tidyr)
+library(textdata)
+library(knitr)
+library(ggpubr)
+
+```
+
+### Introduction
+
+In this project, we explore the differences between men and women in various philoscophical schools of thought. Using philosophical texts from 13 schools spanning over 2000 years (350 BC - 1985), we can begin to better understand how men and women have been discussed historically through to the modern day. 
+
+First, we import the data.
+
+```{r echo = FALSE, warning = FALSE}
+
+data <- read.csv("/Users/sarahkurihara/Desktop/Columbia/STATGR5243 Applied Data Science (Liu)/Assignment 1/spring-2022-prj1-sarahkurihara/data/philosophy_data.csv", stringsAsFactors = FALSE)
+
+#remove columns for preview
+colnames <- colnames(data)
+drop_columns <- c("sentence_lowered", "sentence_str", "corpus_edition_date", "tokenized_txt", "lemmatized_str")
+preview1 <- data %>% select(!drop_columns) 
+kable(head(preview1), caption = "Original Data Set")
+```
+
+Next, we remove stop words. We also include custom stop words from old english that were frequently used in the Stoicism school of thought. We also be sure to remove "man" and "men" from the stop words lists as this will be necessary for future analysis. You can see how the first sentenance in table 1 is repeated multiple times with each row representing a single (important) word from that sentance
+
+```{r echo = FALSE, warning = FALSE}
+data_tokenized <- data %>% unnest_tokens(output = word, 
+                                         input = sentence_spacy)
+
+old_stop_words <- data_frame(word = c("thee", "doth", "thy", "doest", "thou", 
+                                      "thine", "thyself", "shalt", "shall", "hath"), 
+                             lexicon = "old english")
+
+all_stop <- rbind(stop_words, old_stop_words)
+all_stop <- all_stop %>% filter(!word %in% c("man", "men"))
+
+clean_data <- data_tokenized %>% anti_join(all_stop, by = "word")
+drop_columns <- c("sentence_str", "corpus_edition_date", "tokenized_txt", "lemmatized_str")
+preview2 <- clean_data %>% select(!drop_columns) 
+kable(head(preview2, caption = "Tokenized Data without Stop Words"))
+
+```
+
+
+# Top N Words
+
+```{r, echo = FALSE, fig.width=10 , fig.height=11}
+
+clean_data <- tibble(clean_data)
+school_words  <- clean_data %>% 
+                        group_by(school) %>% 
+                        count(school, word, sort = TRUE)
+total_words <-  school_words %>% 
+                        group_by(school) %>% 
+                        summarise(total = sum(n))
+school_words <- left_join(school_words, total_words)
+school_words_preview  <- school_words %>% 
+                                group_by(school) %>% 
+                                slice(which.max(n))
+kable(school_words_preview, caption = "Top words used by each 13 schools of thought")
+
+```
+
+From a quick glance at the top words, we can see that "man" is **the** top word for 4 of the 13 schools!
+
+One should note, that for the purposes of this analysis, we left in "man" and "men" despite them being present in the `stop_words` list. 
+
+# Term Frequency using TF-IDF
+
+However, just because a term appears many times in a document does not mean these words are "distinctive". Instead, we can use TF-IDF to identify the unique words that are most characteristic of a book when compared to other books.
+
+Term Frequency (TF) and Inverse Document Frequency (IDF) are two particular approaches that allow us to identify the top words among a corpus (collection) of documents. Using the `bind_tf_idf` function, we can now identify the top words for each school of thought, relative to the other schools of thought.
+
+A visual representnation of the top 10 words using TF-IDF reveals many more interesting words for each school of thought.
+
+``` {r, echo = FALSE, fig.width=10 , fig.height=11}
+
+school_tf_idf <- school_words %>%
+                bind_tf_idf(word, school, n)
+school_tf_idf %>%
+        select(-total) %>%
+        arrange(desc(tf_idf))
+school_tf_idf %>%
+        group_by(school) %>%
+        slice_max(tf_idf, n = 10) %>%
+        ungroup() %>%
+        ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = school)) +
+        geom_col(show.legend = FALSE) +
+        facet_wrap(~school, ncol = 2, scales = "free") +
+        labs(x = "tf-idf", y = NULL)
+```
+
+Many of these words are not used in everyday language, so we pull some sentences at random to better understand how they are used in context. A little research has helped explain that these are not errors and that the algorithm is working.
+
+* semen (aristotle): "Aristotle holds that semen is nutriment in its final stage of concoction before it becomes part of the body. Hence, blood, before it turns into flesh, bones, etc., first turns into semen" [link](https://en.wikipedia.org/wiki/Vital_heat)
+* dasein (phenomenology): "To ensure that we do not fall into Cartesian language, Heidegger suggests a new term (the first of many). Dasein (literally, "being-there") is the name of this being from whose perspective the world is being described. Dasein is not a consciousness or a mind, nor is it a person. It is not distinguished from the world of which it is aware. It is inseparable from that world. Dasein is, simply, "Being-in-the-World," which Heidegger insists is a "unitary phenomenon" (not being the world). Thus, phenomenology becomes ontology (the nature of being) as well." [link](https://science.jrank.org/pages/10640/Phenomenology-Martin-Heidegger.html)
+* vortices (rationalism) : "A depiction of Rene Descartes' vortices. In his theory, the entire universe was filled with elements of different sizes which shifted around each other. At the center is the sun, which is made up of the smallest kind of element and the bigger ones sift out and circle around it." [link](https://www.loc.gov/collections/finding-our-place-in-the-cosmos-with-carl-sagan/articles-and-essays/modeling-the-cosmos/physical-astronomy-for-the-mechanistic-universe)
+
+```{r, echo = FALSE, warning = FALSE}
+
+top_tfidf <- school_tf_idf %>%
+        group_by(school) %>%
+        slice_max(tf_idf, n = 1)
+
+sentences_top_word <- inner_join(clean_data, top_tfidf, by = "word") 
+
+sentences_top_word <- sentences_top_word %>%
+                                filter(school.x == school.y) %>% 
+                                select(title, school.x, word, sentence_lowered) %>% 
+                                rename(school = school.x)
+
+kable(sample_n(sentences_top_word, 5), caption = "Sentences with most common words used")
+
+```
+
+## How do sentences discussing men and women differ?
+
+First we create two distinct datasets: (1) Sentences which speak of "men" or "man" and (2) Sentences which speak of "women" or "woman". 
+
+``` {r, echo = FALSE, warning = FALSE}
+
+clean_data <- tibble(clean_data)
+
+data_man <- clean_data %>% 
+                filter(word %in% c("man", "men", "male", "boy", "sir")) %>% 
+                unnest_tokens(output = word, input = sentence_str) %>% 
+                anti_join(all_stop, by = "word") %>% 
+                mutate(linenumber = row_number())
+                
+data_man_preview <- data_man %>% 
+                      select(title, sentence_lowered)
+
+kable(sample_n(data_man_preview, 5), caption = "Sentences about Men")
+
+```
+
+``` {r, echo = FALSE, warning = FALSE}
+
+clean_data <- tibble(clean_data)
+
+data_woman <- clean_data %>% 
+                filter(word %in% c("woman", "women", "female", "girl", "lady")) %>% 
+                unnest_tokens(output = word, input = sentence_str) %>% 
+                anti_join(all_stop, by = "word") %>% 
+                mutate(linenumber = row_number())
+
+data_woman_preview <- data_woman %>% 
+                        select(title, sentence_lowered)
+
+kable(sample_n(data_woman_preview, 5), caption = "Sentences about Women")
+
+```
+
+We note that there are many sentences which speak of both male and females in the same sentence. Although a more thorough analysis would include removal of such sentences, for the purposes of this analysis we keep them included in the dataset as we expect that they will have equal impact on both groups of data.
+
+# Sentiment Analysis 
+## What is the general sentiment (positive or negative) when speaking about these two groups?
+
+In this section, we use the 'bing' sentiment lexicon to identify postivie and negative words. We then plot the overall sentiment value for each 250-line chunk of text. 250 was chosen since the average sentence length across all books was 223.
+
+``` {r, echo = FALSE, warning = FALSE, fig.width=10 }
+
+pos_neg <- get_sentiments("bing")
+
+men_sentiment <- data_man %>%
+        group_by(school) %>%
+        inner_join(pos_neg) %>%
+        count(school, index = linenumber %/% 250, sentiment) %>%
+        pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+        mutate(sentiment = positive - negative) 
+        #filter(index > 1500)
+
+women_sentiment <- data_woman %>%
+        group_by(school) %>%
+        inner_join(pos_neg) %>%
+        count(school, index = linenumber %/% 250, sentiment) %>%
+        pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+        mutate(sentiment = positive - negative)  
+        #filter(index > 1500)
+
+p1 <- ggplot(men_sentiment, aes(index, sentiment, fill = school)) +
+        geom_col(show.legend = TRUE) +
+        ylim(-40, 40) +
+        labs(y = "Sentiment of Men")
+        
+p2 <- ggplot(women_sentiment, aes(index, sentiment, fill = school)) +
+        geom_col(show.legend = TRUE) +
+        ylim(-40, 40) +
+        labs(y = "Sentiment of Women")
+
+ggarrange(p1, p2, ncol=2, nrow=1, common.legend = TRUE, legend="top")
+
+
+```
+
+From this analysis, we can see that the positive sentiment is stronger in text about men, where as there are more negative sentiments in text about women. This is likely due to the fact that a lot of feminist writing speak to the inequalities that women face and the suffering caused by dark terms such as "slave" and "rape". 
+
+Additionally, we see that men have a more balanced/equal distribution of positive and negative sentiments. 
+
+However, there are some schools of thought with a noticable imbalance, for example, contintental philosophy seems to be more stronly negative for both groups than other schools of thought.
+
+## For each sentiment, what words are being spoken?
+
+We would like to further understand what words are being spoken when the sentence is classified as positive or negative. Below you can see the top 10 words for each group and each sentiment.
+
+```{r, echo = FALSE, fig.width=10}
+
+m_bing_wc <- data_man %>%
+                inner_join(pos_neg) %>%
+                count(word, sentiment, sort = TRUE) %>%
+                ungroup()
+
+w_bing_wc <- data_woman %>%
+                inner_join(pos_neg) %>%
+                count(word, sentiment, sort = TRUE) %>%
+                ungroup()
+
+m_wc <- m_bing_wc %>%
+        group_by(sentiment) %>%
+        slice_max(n, n = 10) %>% 
+        ungroup() %>%
+        mutate(word = reorder(word, n)) %>%
+        ggplot(aes(n, word, fill = sentiment)) +
+        geom_col(show.legend = FALSE) +
+        facet_wrap(~sentiment, scales = "free_y") +
+        labs(y = "Men")
+
+w_wc <- w_bing_wc %>%
+        group_by(sentiment) %>%
+        slice_max(n, n = 10) %>% 
+        ungroup() %>%
+        mutate(word = reorder(word, n)) %>%
+        ggplot(aes(n, word, fill = sentiment)) +
+        geom_col(show.legend = FALSE) +
+        facet_wrap(~sentiment, scales = "free_y") +
+        labs(x = "Contribution to sentiment",
+             y = "Women")
+
+ggarrange(m_wc, w_wc, nrow=2)
+
+```
+
+The above highlights the *unique* positive sentences about women refer to many characteristics of women that are highly valued in society, such as "lover", "beauty", and "saint". However, the positive sentences about men refer to leadership qualities such as "wise", "regard", "capable", "respect" and "excellence".
+
+Similarly, the *unique* negative words seen for women are: "slave", "lost", and "difficult". Whereas for men, the negative words are "death", "evil", "madness". 
+
+# Conclusion
+
+It can be seen from this simple analysis that societal views of men and women can even be seen when performing simple text analytics on a dataset of historical and philosophical books from over 2000 years. It highlights the systemic issues that women face in society as well as the high pressures that men face to be strong leaders.
+
+Based on this analysis, we can conclude the women and men are, in fact, viewed differently, even in the eyes of philosophy. As we live in the modern age, it would be interesting to pull more text from the current decade to understand if there are positive trends for both men and women. Additional analysis would be needed to determine if there has been a shift and what are the significant terms that has led to this change in mindset.
+
+# References
+[Text Mining with R](https://www.tidytextmining.com/index.html)
+
